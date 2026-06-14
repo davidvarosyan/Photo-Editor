@@ -1,12 +1,12 @@
-package com.varos.imageenhance.domain
+package com.varos.imageenhance.domain.repository
 
 import android.graphics.Bitmap
 import android.net.Uri
 
 /**
  * Loads images from the platform (gallery/camera URIs) and persists results.
- * Abstracted so the ViewModel never touches ContentResolver/EXIF/MediaStore
- * directly, keeping Android framework concerns in the data layer.
+ * Abstracted so the domain/presentation never touch ContentResolver/EXIF/
+ * MediaStore directly, keeping Android framework concerns in the data layer.
  */
 interface ImageRepository {
     /**

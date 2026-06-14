@@ -1,4 +1,4 @@
-package com.varos.imageenhance.ui.editor.components
+package com.varos.imageenhance.presentation.editor.components
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image

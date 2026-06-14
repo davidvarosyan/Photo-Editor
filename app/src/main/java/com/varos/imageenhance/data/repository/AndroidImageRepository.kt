@@ -1,4 +1,4 @@
-package com.varos.imageenhance.data
+package com.varos.imageenhance.data.repository
 
 import android.content.ContentValues
 import android.content.Context
@@ -11,7 +11,7 @@ import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
-import com.varos.imageenhance.domain.ImageRepository
+import com.varos.imageenhance.domain.repository.ImageRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException

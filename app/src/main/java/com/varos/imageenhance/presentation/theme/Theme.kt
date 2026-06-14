@@ -1,4 +1,4 @@
-package com.varos.imageenhance.ui.theme
+package com.varos.imageenhance.presentation.theme
 
 import android.app.Activity
 import android.os.Build

@@ -33,116 +33,124 @@ and the layout stable.
 
 ## Image-processing pipeline
 
-Each step is a self-contained `ImageFilter` in
+Kept deliberately **light** (no GPU/RenderEffect, no heavy spatial passes). Each
+step is a self-contained `ImageFilter` in
 [`data/filter/`](app/src/main/java/com/varos/imageenhance/data/filter), applied
 by the pipeline in registration order:
 
 1. **Brightness** — additive `ColorMatrix` offset.
 2. **Contrast** — multiplicative `ColorMatrix` pivoting around mid-gray so the
    image doesn't drift dark.
-3. **Denoise** — 3×3 median filter (edge-preserving speckle removal), blended by
-   strength.
-4. **Sharpen** — 3×3 unsharp-mask convolution.
-5. **Edges** — Sobel gradient magnitude high-boost to emphasize outlines/text.
-6. **Blur** — separable O(pixels) sliding-window box blur (radius).
-7. **Grayscale** — `ColorMatrix` desaturation (toggle).
-8. **B&W** — global luminance threshold (one knob doubles as on/off).
-9. **Document** — Bradley **adaptive** thresholding via an integral image: each
-   pixel is compared to its local neighbourhood mean, so uneven lighting and
-   shadows on receipts/notes/pages binarize cleanly (toggle).
+3. **Sharpen** — 3×3 unsharp-mask convolution.
+4. **Grayscale** — `ColorMatrix` desaturation (toggle).
+5. **B&W** — global luminance threshold (one knob doubles as on/off).
 
-All pixel passes are `suspend` and check `ensureActive()` per row so superseded
-previews cancel promptly.
-
-Each adjustable parameter is a field of the immutable
-[`EnhancementSettings`](app/src/main/java/com/varos/imageenhance/domain/model/EnhancementSettings.kt).
-Adding a new filter is: add a field, add a step in the processor, and add an
-entry to the `EditTool` enum (one tab + seek bar) — the UI/state plumbing is
-generic.
+All passes are `suspend` and check `ensureActive()` per row so superseded renders
+cancel promptly. Adding a filter is two steps (implement `ImageFilter`, add it to
+the list in `appModule`) — UI tabs, seek bars and the pipeline are all generic
+over the interface.
 
 ## Architecture
 
-Clean Architecture + MVVM, one-way data flow with a single immutable UI state,
-**use cases** per user action, and **Koin** for dependency injection.
+**Clean Architecture + MVI**, one-way data flow, a single immutable state, **use
+cases** per action, and **Koin** for DI. Folders mirror the layers and the MVI
+roles, so the structure is predictable:
 
 ```
-domain/   ImageProcessor, ImageRepository (interfaces),
-          ImageFilter / FilterParameter / PipelineSettings (models),
-          usecase/ (LoadImage, EnhanceImage, SaveImage, CreateCaptureUri, GetFilters)
-data/     AndroidImageRepository, FilterPipeline,
-          filter/ (BrightnessFilter, ContrastFilter, SharpenFilter,
-                   GrayscaleFilter, ThresholdFilter, ColorMatrixFilter base)
-di/       appModule  ← single Koin composition root
-ui/       EditorViewModel + EditorUiState + Compose screen/components
+domain/                     ← pure (no Android UI deps)
+  model/                    ImageFilter, FilterParameter, PipelineSettings
+  repository/               ImageRepository
+  processor/                ImageProcessor
+  usecase/                  LoadImage, EnhanceImage, SaveImageToGallery,
+                            CreateCaptureUri, GetFilters  (one file each)
+data/                       ← framework implementations
+  filter/                   BrightnessFilter, ContrastFilter, SharpenFilter,
+                            GrayscaleFilter, ThresholdFilter, ColorMatrixFilter
+  processor/                FilterPipeline
+  repository/               AndroidImageRepository
+di/                         appModule  ← single Koin composition root
+presentation/
+  theme/                    Compose theme
+  editor/                   EditorContract (State/Intent/Effect),
+                            EditorViewModel, EditorScreen
+    components/             BeforeAfterSlider, ToolPanel
 ```
 
-- **Pluggable filters**: every image-processing functional implements the
-  [`ImageFilter`](app/src/main/java/com/varos/imageenhance/domain/model/ImageFilter.kt)
-  interface (id, display name, one `FilterParameter`, `apply`). The pipeline, the
-  tabs and the seek bars are all generic over this interface.
-- **Adding a new functional** is two steps: implement `ImageFilter`, then add it
-  to the `filters` list in
-  [`appModule`](app/src/main/java/com/varos/imageenhance/di/AppModule.kt). It then
-  automatically appears as a tab with its control and joins the pipeline — no UI,
-  ViewModel, or state changes. List order = pipeline order = tab order.
-- **Use cases** give one explicit, testable seam per action; the ViewModel knows
-  nothing about repositories or the processor.
-- **DI with Koin**: `App` starts Koin; `MainActivity` resolves the ViewModel via
-  `koinViewModel()`; the graph is wired in one module.
-- **UI ↔ state ↔ processing are separate**: the screen is a pure function of
-  `EditorUiState`; the ViewModel mutates one `StateFlow`; the pixel work lives
-  behind the `ImageProcessor` / `ImageFilter` interfaces.
-- **Responsiveness / background work**: every slider change updates state
-  instantly so the UI feels live, while the expensive processing runs on
-  `Dispatchers.Default` driven by a **debounced** flow using `mapLatest`, so a
-  newer parameter value **cancels** in-flight processing of a stale one. The
-  pipeline checks `ensureActive()` between/within steps.
-- **Large images / memory**: photos are decoded with `inSampleSize` and bounded
-  to a max long-edge (2048 px), so we never inflate a 50 MP image into RAM.
-- **Rotation**: EXIF orientation is read and baked into the bitmap (best-effort —
-  a missing/unreadable EXIF tag never fails the load).
-- **DI**: wired by hand in `MainActivity` (clearer than a framework for one
-  screen); the interfaces keep the door open for Hilt later.
+### MVI
+
+- **State** — `EditorState`, one immutable data class. The screen is a pure
+  function of it.
+- **Intent** — `EditorIntent` (sealed). The View only ever calls
+  `viewModel.onIntent(...)`; the ViewModel is the single owner/mutator of state.
+- **Effect** — `EditorEffect` (sealed), one-shot side effects (snackbar
+  messages) delivered over a `Channel`, kept out of persistent state.
+
+### Two-tier rendering (responsive seek bars)
+
+Processing is split so the UI never blocks and the result is sharp:
+
+- **While dragging** (`ChangeFilterValue`) we render a **downscaled preview**
+  (`PREVIEW_MAX_EDGE`, ~1080 px) — fast, near-instant feedback every frame.
+- **When the bar settles** (`CommitFilters`, fired from Slider
+  `onValueChangeFinished`) we render the **full-resolution** result.
+
+Both streams use `mapLatest`, so a newer value cancels stale work; the final
+stream is debounced and shows a progress bar.
+
+### Process-death survival ("AKM")
+
+The source `Uri`, the `PipelineSettings` and the selected tab are persisted in
+**`SavedStateHandle`**. On recreation (config change *or* background process
+kill) the ViewModel reloads the image from the `Uri` and re-applies the saved
+edits, returning the user exactly where they were. Bitmaps are too large to
+serialize, so we persist the `Uri` and reload rather than the pixels.
+
+### Other guarantees
+
+- **Large images / memory** — decoded with `inSampleSize`, bounded to a 2048 px
+  long edge; intermediates recycled in the pipeline.
+- **Rotation** — EXIF orientation baked into the bitmap (best-effort; a
+  missing/unreadable tag never fails the load).
+- **DI with Koin** — `ImageEnhanceApp` starts Koin; `MainActivity` resolves the
+  ViewModel via `koinViewModel()` (Koin supplies `SavedStateHandle`); the whole
+  graph lives in one readable module.
 
 ## Third-party libraries
 
-Intentionally minimal — no image library was needed:
+Intentionally minimal — no image library needed:
 
+- **Koin** (`koin-androidx-compose`) — lightweight, no-codegen DI; one readable
+  composition root, which suits the plugin-filter model.
 - **`androidx.exifinterface`** — reliable EXIF orientation across formats/devices.
 - **`kotlinx-coroutines`** — background processing, debounce, cancellation.
-- **Koin** (`koin-androidx-compose`) — lightweight, no-codegen DI; keeps the
-  composition root in one readable module, which suits the plugin-filter model
-  (registering a filter is a one-line list edit).
 - **`lifecycle-viewmodel-compose`** + **`material-icons-extended`** — standard
-  Jetpack/Compose tooling. Bitmaps are rendered directly via
-  `bitmap.asImageBitmap()`, so no Coil/Glide dependency.
+  Jetpack/Compose tooling. Bitmaps render directly via `bitmap.asImageBitmap()`,
+  so no Coil/Glide dependency.
 
 ## Trade-offs (timebox)
 
-- CPU convolution for sharpening rather than RenderScript/GPU/RenderEffect —
-  simpler and portable; fine at the 2048 px preview size.
-- Global (not adaptive) thresholding — one slider is predictable; adaptive
-  (Sauvola/Otsu) would read better on uneven lighting but is more code.
-- Manual DI instead of Hilt; minimal tests (pure-domain unit tests only).
-- The processed result is held in memory; no undo history or document
-  edge-detection/perspective-crop.
+- Light filter set only (color-matrix + one convolution + threshold); heavier
+  effects (blur, denoise, edge, adaptive document scan) and the GPU/AGSL pipeline
+  were intentionally removed to keep the app simple and fast.
+- Global (not adaptive) thresholding — predictable single knob.
+- Preview/final reload on process death rather than persisting pixels.
 
 ## What I'd improve for production
 
-- Adaptive thresholding + auto-deskew/perspective crop for documents.
-- GPU pipeline (`RenderEffect` / RenderScript replacement / OpenGL) for instant,
-  full-resolution previews; process full-res only on save.
-- Undo/redo stack and persisted edit sessions (`SavedStateHandle`).
-- Hilt for DI, broader unit/instrumentation tests (Robolectric for the processor),
-  and crop/rotate gestures in the viewport.
+- Re-introduce optional heavier filters behind the same `ImageFilter` contract,
+  GPU-accelerated where it pays off.
+- Undo/redo stack; crop/rotate gestures in the viewport.
+- Broader unit/instrumentation tests (Robolectric for the pipeline).
 
 ## Known limitations
 
-- Sharpening/threshold are O(pixels) on CPU; very large previews have a brief
-  processing delay (debounced + shown via a progress bar).
-- Save targets `Pictures/ImageEnhance` via MediaStore; on API < 29 it relies on
-  scoped behavior and may vary by OEM.
-- No batch processing; one image at a time.
+- Sharpen/threshold are O(pixels) on CPU; the full-res render after a drag has a
+  brief delay (shown via the progress bar) — the live preview hides it.
+- Save targets `Pictures/ImageEnhance` via MediaStore; on API < 29 behaviour may
+  vary by OEM.
+- On process death the captured-photo temp file (camera path) may have been
+  cleared from cache; gallery picks always reload.
+- One image at a time; no batch processing.
 
 ## Build & run
 

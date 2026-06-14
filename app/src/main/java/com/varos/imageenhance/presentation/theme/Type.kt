@@ -1,4 +1,4 @@
-package com.varos.imageenhance.ui.theme
+package com.varos.imageenhance.presentation.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

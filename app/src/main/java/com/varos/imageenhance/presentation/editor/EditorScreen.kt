@@ -1,5 +1,6 @@
-package com.varos.imageenhance.ui.editor
+package com.varos.imageenhance.presentation.editor
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,13 +45,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.varos.imageenhance.domain.model.ImageFilter
-import com.varos.imageenhance.ui.editor.components.BeforeAfterSlider
-import com.varos.imageenhance.ui.editor.components.ToolPanel
+import com.varos.imageenhance.presentation.editor.components.BeforeAfterSlider
+import com.varos.imageenhance.presentation.editor.components.ToolPanel
+import kotlinx.coroutines.flow.collectLatest
 
 /**
- * Top-level editor UI. Renders purely from [EditorUiState] and forwards user
- * intents to the [EditorViewModel]. The photo picker uses the modern
- * PickVisualMedia contract, which needs no runtime storage permission.
+ * Editor View (MVI): renders purely from [EditorState] and forwards every user
+ * action as an [EditorIntent]. One-shot [EditorEffect]s drive the snackbar. The
+ * photo picker uses the modern PickVisualMedia contract (no storage permission).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,14 +62,14 @@ fun EditorScreen(viewModel: EditorViewModel) {
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> uri?.let(viewModel::onImagePicked) }
+    ) { uri -> uri?.let { viewModel.onIntent(EditorIntent.PickImage(it)) } }
 
     // Hold the capture target across the camera round-trip; on success we load it.
-    var pendingCaptureUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
     val camera = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture(),
     ) { success ->
-        if (success) pendingCaptureUri?.let(viewModel::onImagePicked)
+        if (success) pendingCaptureUri?.let { viewModel.onIntent(EditorIntent.PickImage(it)) }
         pendingCaptureUri = null
     }
 
@@ -81,11 +83,11 @@ fun EditorScreen(viewModel: EditorViewModel) {
         camera.launch(uri)
     }
 
-    // Surface one-shot messages, then clear them so they don't repeat on rotation.
-    LaunchedEffect(state.message) {
-        state.message?.let {
-            snackbarHost.showSnackbar(it)
-            viewModel.onMessageShown()
+    LaunchedEffect(Unit) {
+        viewModel.effects.collectLatest { effect ->
+            when (effect) {
+                is EditorEffect.ShowMessage -> snackbarHost.showSnackbar(effect.text)
+            }
         }
     }
 
@@ -120,10 +122,7 @@ fun EditorScreen(viewModel: EditorViewModel) {
                 else -> LoadedEditor(
                     state = state,
                     filters = viewModel.filters,
-                    isEdited = viewModel.isEdited(state),
-                    onFilterChange = viewModel::onFilterValueChanged,
-                    onReset = viewModel::onReset,
-                    onSave = viewModel::onSave,
+                    onIntent = viewModel::onIntent,
                 )
             }
         }
@@ -174,18 +173,12 @@ private fun EmptyState(isLoading: Boolean, onPick: () -> Unit, onCamera: () -> U
 
 @Composable
 private fun LoadedEditor(
-    state: EditorUiState,
+    state: EditorState,
     filters: List<ImageFilter>,
-    isEdited: Boolean,
-    onFilterChange: (filterId: String, value: Float) -> Unit,
-    onReset: () -> Unit,
-    onSave: () -> Unit,
+    onIntent: (EditorIntent) -> Unit,
 ) {
     val original = state.original ?: return
     val processed = state.processed ?: original
-    var selectedFilterId by remember(filters) {
-        mutableStateOf(filters.firstOrNull()?.id ?: "")
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Comparison viewport fills all remaining space. Because the panel below
@@ -217,14 +210,14 @@ private fun LoadedEditor(
             )
         }
 
-        // Fixed-height controls: per-tool seek bar + tab strip + actions.
         Column(modifier = Modifier.fillMaxWidth()) {
             ToolPanel(
                 filters = filters,
-                selectedFilterId = selectedFilterId,
-                onSelect = { selectedFilterId = it },
+                selectedFilterId = state.selectedFilterId,
+                onSelect = { onIntent(EditorIntent.SelectFilter(it)) },
                 settings = state.settings,
-                onChange = onFilterChange,
+                onChange = { id, value -> onIntent(EditorIntent.ChangeFilterValue(id, value)) },
+                onCommit = { onIntent(EditorIntent.CommitFilters) },
             )
             Row(
                 modifier = Modifier
@@ -233,8 +226,8 @@ private fun LoadedEditor(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OutlinedButton(
-                    onClick = onReset,
-                    enabled = isEdited && !state.isSaving,
+                    onClick = { onIntent(EditorIntent.Reset) },
+                    enabled = state.isEdited && !state.isSaving,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null)
@@ -242,7 +235,7 @@ private fun LoadedEditor(
                     Text("Reset")
                 }
                 Button(
-                    onClick = onSave,
+                    onClick = { onIntent(EditorIntent.Save) },
                     enabled = !state.isSaving && !state.isProcessing,
                     modifier = Modifier.weight(1f),
                 ) {

@@ -1,4 +1,4 @@
-package com.varos.imageenhance.ui.editor.components
+package com.varos.imageenhance.presentation.editor.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,14 +13,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BlurOn
-import androidx.compose.material.icons.filled.BorderOuter
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Deblur
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FilterBAndW
-import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
@@ -55,6 +51,7 @@ fun ToolPanel(
     onSelect: (String) -> Unit,
     settings: PipelineSettings,
     onChange: (filterId: String, value: Float) -> Unit,
+    onCommit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -73,7 +70,11 @@ fun ToolPanel(
                     FilterParameter.Kind.TOGGLE -> ToggleTool(
                         label = filter.displayName,
                         checked = value >= 0.5f,
-                        onCheckedChange = { onChange(filter.id, if (it) 1f else 0f) },
+                        // A toggle has no "drag": change + commit full-res at once.
+                        onCheckedChange = {
+                            onChange(filter.id, if (it) 1f else 0f)
+                            onCommit()
+                        },
                     )
 
                     FilterParameter.Kind.SLIDER -> ToolSlider(
@@ -81,7 +82,8 @@ fun ToolPanel(
                         value = value,
                         valueRange = filter.parameter.min..filter.parameter.max,
                         display = filter.format(value),
-                        onValueChange = { onChange(filter.id, it) },
+                        onValueChange = { onChange(filter.id, it) }, // live preview
+                        onValueChangeFinished = onCommit,             // final render
                     )
                 }
             }
@@ -111,13 +113,9 @@ fun ToolPanel(
 private fun iconFor(filterId: String): ImageVector = when (filterId) {
     "brightness" -> Icons.Filled.Brightness6
     "contrast" -> Icons.Filled.Contrast
-    "denoise" -> Icons.Filled.Grain
     "sharpen" -> Icons.Filled.Deblur
-    "edge" -> Icons.Filled.BorderOuter
-    "blur" -> Icons.Filled.BlurOn
     "grayscale" -> Icons.Filled.Gradient
     "threshold" -> Icons.Filled.FilterBAndW
-    "document" -> Icons.Filled.Description
     else -> Icons.Filled.Tune
 }
 
@@ -158,6 +156,7 @@ private fun ToolSlider(
     valueRange: ClosedFloatingPointRange<Float>,
     display: String,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -172,7 +171,12 @@ private fun ToolSlider(
                 textAlign = TextAlign.End,
             )
         }
-        Slider(value = value, onValueChange = onValueChange, valueRange = valueRange)
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = valueRange,
+        )
     }
 }
 

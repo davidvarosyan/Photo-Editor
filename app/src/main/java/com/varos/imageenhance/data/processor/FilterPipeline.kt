@@ -1,7 +1,7 @@
-package com.varos.imageenhance.data
+package com.varos.imageenhance.data.processor
 
 import android.graphics.Bitmap
-import com.varos.imageenhance.domain.ImageProcessor
+import com.varos.imageenhance.domain.processor.ImageProcessor
 import com.varos.imageenhance.domain.model.ImageFilter
 import com.varos.imageenhance.domain.model.PipelineSettings
 import kotlinx.coroutines.CoroutineDispatcher

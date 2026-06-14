@@ -7,9 +7,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.varos.imageenhance.ui.editor.EditorScreen
-import com.varos.imageenhance.ui.editor.EditorViewModel
-import com.varos.imageenhance.ui.theme.PhotoEditorTheme
+import com.varos.imageenhance.presentation.editor.EditorScreen
+import com.varos.imageenhance.presentation.editor.EditorViewModel
+import com.varos.imageenhance.presentation.theme.PhotoEditorTheme
 import org.koin.androidx.compose.koinViewModel
 
 /**
