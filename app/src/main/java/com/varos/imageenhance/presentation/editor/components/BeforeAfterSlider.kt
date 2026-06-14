@@ -17,7 +17,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +33,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+
+private val HANDLE_SIZE = 44.dp
 
 /**
  * Interactive before/after comparison. The processed image is drawn full-frame;
@@ -53,8 +55,9 @@ fun BeforeAfterSlider(
         contentAlignment = Alignment.Center,
     ) {
         val widthPx = constraints.maxWidth.toFloat()
-        var handleX by remember(widthPx) { mutableFloatStateOf(widthPx / 2f) }
-        val fraction = (handleX / widthPx).coerceIn(0f, 1f)
+        // Source of truth is the 0..1 fraction (not a pixel X), so the divider
+        // keeps its place across re-measures, bitmap swaps and rotation.
+        var fraction by rememberSaveable { mutableFloatStateOf(0.5f) }
 
         // After (processed): full frame underneath.
         Image(
@@ -83,7 +86,7 @@ fun BeforeAfterSlider(
                 .pointerInput(widthPx) {
                     detectHorizontalDragGestures { change, dragAmount ->
                         change.consume()
-                        handleX = (handleX + dragAmount).coerceIn(0f, widthPx)
+                        fraction = (fraction + dragAmount / widthPx).coerceIn(0f, 1f)
                     }
                 },
         ) {
@@ -106,8 +109,10 @@ fun BeforeAfterSlider(
                 shadowElevation = 4.dp,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .offset { IntOffset((widthPx * fraction).roundToInt() - 22, 0) }
-                    .size(44.dp),
+                    // Center the 44.dp grip on the divider: subtract half its
+                    // width in *pixels* (dp must be converted in this Density scope).
+                    .offset { IntOffset((widthPx * fraction).roundToInt() - HANDLE_SIZE.roundToPx() / 2, 0) }
+                    .size(HANDLE_SIZE),
             ) {
                 Icon(
                     imageVector = Icons.Filled.CompareArrows,
