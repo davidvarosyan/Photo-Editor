@@ -11,10 +11,10 @@ import android.net.Uri
 interface ImageRepository {
     /**
      * Decodes the image at [uri], corrects its orientation from EXIF and
-     * downsamples it so the longest edge is at most [maxEdge] px to bound
-     * memory use on large photos.
+     * downsamples it so the decoded bitmap has at most [maxPixels] pixels — a
+     * memory bound that holds for any aspect ratio, including gigapixel images.
      */
-    suspend fun loadBitmap(uri: Uri, maxEdge: Int = 2048): Bitmap
+    suspend fun loadBitmap(uri: Uri, maxPixels: Long): Bitmap
 
     /** Saves [bitmap] to the device's shared Pictures collection, returning its Uri. */
     suspend fun saveToGallery(bitmap: Bitmap, displayName: String): Uri

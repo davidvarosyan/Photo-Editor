@@ -33,22 +33,29 @@ and the layout stable.
 
 ## Image-processing pipeline
 
-Kept deliberately **light** (no GPU/RenderEffect, no heavy spatial passes). Each
-step is a self-contained `ImageFilter` in
-[`data/filter/`](app/src/main/java/com/varos/imageenhance/data/filter), applied
-by the pipeline in registration order:
+**GPU-accelerated** via [GPUImage](https://github.com/cats-oss/android-gpuimage)
+(OpenGL ES fragment shaders). All enabled filters run as a single GLES filter
+group in one upload → multi-pass → readback, off-screen, off the main thread
+([`GpuImageProcessor`](app/src/main/java/com/varos/imageenhance/data/processor/GpuImageProcessor.kt)).
+Each step is a [`GlImageFilter`](app/src/main/java/com/varos/imageenhance/data/filter/GlImageFilter.kt)
+(domain metadata + a GPUImage filter factory), applied in registration order:
 
-1. **Brightness** — additive `ColorMatrix` offset.
-2. **Contrast** — multiplicative `ColorMatrix` pivoting around mid-gray so the
-   image doesn't drift dark.
-3. **Sharpen** — 3×3 unsharp-mask convolution.
-4. **Grayscale** — `ColorMatrix` desaturation (toggle).
-5. **B&W** — global luminance threshold (one knob doubles as on/off).
+1. **Brightness** — `GPUImageBrightnessFilter`.
+2. **Contrast** — `GPUImageContrastFilter`.
+3. **Denoise** — edge-preserving `GPUImageBilateralBlurFilter`.
+4. **Sharpen** — `GPUImageSharpenFilter`.
+5. **Edges** — 3×3 Laplacian high-boost via `GPUImage3x3ConvolutionFilter`.
+6. **Blur** — `GPUImageGaussianBlurFilter`.
+7. **Grayscale** — `GPUImageGrayscaleFilter` (toggle).
+8. **B&W** — `GPUImageLuminanceThresholdFilter` (one knob doubles as on/off).
+9. **Document** — custom GLES adaptive threshold
+   ([`GpuAdaptiveThresholdFilter`](app/src/main/java/com/varos/imageenhance/data/filter/GpuAdaptiveThresholdFilter.kt)):
+   each pixel vs its 5×5 local mean, so uneven lighting binarizes cleanly (toggle).
 
-All passes are `suspend` and check `ensureActive()` per row so superseded renders
-cancel promptly. Adding a filter is two steps (implement `ImageFilter`, add it to
-the list in `appModule`) — UI tabs, seek bars and the pipeline are all generic
-over the interface.
+Adding a filter is two steps (implement `GlImageFilter`, add it to the list in
+`appModule`) — UI tabs, seek bars and the pipeline are all generic over the
+interface. The domain `ImageFilter` stays pure (no GPU types); the GPU factory
+lives in the data layer.
 
 ## Architecture
 
@@ -85,17 +92,27 @@ presentation/
 - **Effect** — `EditorEffect` (sealed), one-shot side effects (snackbar
   messages) delivered over a `Channel`, kept out of persistent state.
 
-### Two-tier rendering (responsive seek bars)
+### Live rendering (responsive seek bars)
 
-Processing is split so the UI never blocks and the result is sharp:
+Because processing is GPU-accelerated, every seek-bar change renders the **full
+(heap-bounded) working bitmap** directly — no separate downscaled-preview tier.
+A single stream uses **`conflate()`**, which "processes only the latest": any
+intermediate values that arrive while a render is in flight are dropped, and the
+newest one renders to completion (never cancelled), so the displayed frame always
+matches the finger.
 
-- **While dragging** (`ChangeFilterValue`) we render a **downscaled preview**
-  (`PREVIEW_MAX_EDGE`, ~1080 px) — fast, near-instant feedback every frame.
-- **When the bar settles** (`CommitFilters`, fired from Slider
-  `onValueChangeFinished`) we render the **full-resolution** result.
+### Pluggable rendering backend
 
-Both streams use `mapLatest`, so a newer value cancels stale work; the final
-stream is debounced and shows a progress bar.
+The pipeline is **backend-agnostic**. The same domain, MVI ViewModel and use
+cases drive either of two `ImageProcessor` implementations, chosen by one flag
+(`USE_GPU`) in [`appModule`](app/src/main/java/com/varos/imageenhance/di/AppModule.kt):
+
+- [`GpuImageProcessor`](app/src/main/java/com/varos/imageenhance/data/processor/GpuImageProcessor.kt) — OpenGL ES via GPUImage (default, full filter set).
+- [`CpuImageProcessor`](app/src/main/java/com/varos/imageenhance/data/processor/CpuImageProcessor.kt) — CPU bitmap passes (a parallel backend kept in the codebase to demonstrate extensibility; a subset of filters, easily expanded).
+
+Each filter declares pure domain metadata (`ImageFilter`) plus a backend-specific
+renderer (`GlImageFilter` → a GPUImage filter; `CpuImageFilter` → a bitmap pass).
+New backends (RenderEffect, native, remote…) drop in the same way.
 
 ### Process-death survival ("AKM")
 
@@ -105,10 +122,24 @@ kill) the ViewModel reloads the image from the `Uri` and re-applies the saved
 edits, returning the user exactly where they were. Bitmaps are too large to
 serialize, so we persist the `Uri` and reload rather than the pixels.
 
-### Other guarantees
+### Memory strategy — high-res but OOM-safe
 
-- **Large images / memory** — decoded with `inSampleSize`, bounded to a 2048 px
-  long edge; intermediates recycled in the pipeline.
+Driven by [`MemoryPolicy`](app/src/main/java/com/varos/imageenhance/domain/policy/MemoryPolicy.kt),
+which derives **pixel budgets from the heap** (`Runtime.maxMemory()`, with
+`largeHeap=true`). Sampling is by total pixels (not edge), so the bound holds for
+any aspect ratio including panoramas/gigapixel maps.
+
+- **Editing** runs on a heap-bounded working copy (`editingMaxPixels`) — as high
+  resolution as fits safely once the ~4× pipeline peak and live preview are
+  accounted for. The live drag preview is further downscaled (~1080px).
+- **Saving** re-decodes the *original* at `exportMaxPixels` and re-runs the
+  pipeline ([`ExportImageUseCase`](app/src/main/java/com/varos/imageenhance/domain/usecase/ExportImageUseCase.kt)),
+  so the file is **full original resolution whenever it fits the budget** (a
+  typical 12 MP photo saves at its true 4000×3000). Only images larger than the
+  budget — e.g. gigapixel maps — are downsampled to the largest safe size, so a
+  huge image **never OOMs**; the save toast reports the actual saved dimensions.
+- Pipeline intermediates are recycled as the chain runs; the export bitmap is
+  recycled after compression.
 - **Rotation** — EXIF orientation baked into the bitmap (best-effort; a
   missing/unreadable tag never fails the load).
 - **DI with Koin** — `ImageEnhanceApp` starts Koin; `MainActivity` resolves the
@@ -119,6 +150,9 @@ serialize, so we persist the `Uri` and reload rather than the pixels.
 
 Intentionally minimal — no image library needed:
 
+- **GPUImage** (`jp.co.cyberagent.android:gpuimage`) — OpenGL ES filter pipeline
+  with off-screen bitmap rendering; gives GPU-accelerated convolutions/blur on
+  all target devices (works on minSdk 28, no deprecated RenderScript/AGSL-33+).
 - **Koin** (`koin-androidx-compose`) — lightweight, no-codegen DI; one readable
   composition root, which suits the plugin-filter model.
 - **`androidx.exifinterface`** — reliable EXIF orientation across formats/devices.
@@ -129,10 +163,12 @@ Intentionally minimal — no image library needed:
 
 ## Trade-offs (timebox)
 
-- Light filter set only (color-matrix + one convolution + threshold); heavier
-  effects (blur, denoise, edge, adaptive document scan) and the GPU/AGSL pipeline
-  were intentionally removed to keep the app simple and fast.
-- Global (not adaptive) thresholding — predictable single knob.
+- GPU max texture size is treated as 4096² (the safe API-28+ floor) rather than
+  queried at runtime, so images above ~16 MP are downsampled even on GPUs that
+  could handle more.
+- GPUImage renders each `process()` call as a fresh off-screen pass; a persistent
+  GL context with per-frame uniform updates would squeeze out more live-preview
+  performance (a follow-up).
 - Preview/final reload on process death rather than persisting pixels.
 
 ## What I'd improve for production
@@ -150,6 +186,10 @@ Intentionally minimal — no image library needed:
   vary by OEM.
 - On process death the captured-photo temp file (camera path) may have been
   cleared from cache; gallery picks always reload.
+- Truly enormous images (gigapixel) are saved downsampled to the heap-safe size,
+  not at full original resolution — `Bitmap.compress` needs the whole bitmap in
+  memory, so full-res export of those would require tiled encoding (a production
+  follow-up). Normal phone photos (≤ ~16 MP) save at true original resolution.
 - One image at a time; no batch processing.
 
 ## Build & run

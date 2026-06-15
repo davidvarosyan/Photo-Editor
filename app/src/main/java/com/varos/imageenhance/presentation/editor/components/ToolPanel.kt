@@ -13,10 +13,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BlurOn
+import androidx.compose.material.icons.filled.BorderOuter
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Deblur
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FilterBAndW
+import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
@@ -113,9 +117,13 @@ fun ToolPanel(
 private fun iconFor(filterId: String): ImageVector = when (filterId) {
     "brightness" -> Icons.Filled.Brightness6
     "contrast" -> Icons.Filled.Contrast
+    "denoise" -> Icons.Filled.Grain
     "sharpen" -> Icons.Filled.Deblur
+    "edge" -> Icons.Filled.BorderOuter
+    "blur" -> Icons.Filled.BlurOn
     "grayscale" -> Icons.Filled.Gradient
     "threshold" -> Icons.Filled.FilterBAndW
+    "document" -> Icons.Filled.Description
     else -> Icons.Filled.Tune
 }
 

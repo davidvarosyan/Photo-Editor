@@ -8,13 +8,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.varos.imageenhance.domain.model.ImageFilter
 import com.varos.imageenhance.domain.model.PipelineSettings
+import com.varos.imageenhance.domain.policy.MemoryPolicy
 import com.varos.imageenhance.domain.usecase.CreateCaptureUriUseCase
 import com.varos.imageenhance.domain.usecase.EnhanceImageUseCase
+import com.varos.imageenhance.domain.usecase.ExportImageUseCase
 import com.varos.imageenhance.domain.usecase.GetFiltersUseCase
 import com.varos.imageenhance.domain.usecase.LoadImageUseCase
-import com.varos.imageenhance.domain.usecase.SaveImageToGalleryUseCase
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -22,37 +21,30 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.conflate
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.mapLatest
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import kotlin.math.max
 
 /**
  * MVI ViewModel for the editor. The View sends [EditorIntent]s to [onIntent];
  * the ViewModel is the single owner of [EditorState] and the only place that
  * mutates it, and emits one-shot [EditorEffect]s through [effects].
  *
- * Responsiveness (two-tier rendering):
- *  - while a seek bar is dragged ([EditorIntent.ChangeFilterValue]) we render a
- *    **downscaled preview** — fast, near-instant feedback.
- *  - when the bar settles ([EditorIntent.CommitFilters]) we render the
- *    **full-resolution** result.
- * Both streams use [mapLatest], so a newer value cancels stale work.
+ * Responsiveness: each seek-bar change renders the full (heap-bounded) working
+ * bitmap on the GPU via a single conflated stream — fast enough that no separate
+ * downscaled-preview tier is needed; conflate() keeps only the latest value.
  *
  * Process-death survival ("AKM"): the source [Uri], the [PipelineSettings] and
  * the selected tab are persisted in [SavedStateHandle]; on recreation the image
  * is reloaded and the saved edits re-applied, so the user returns to exactly
  * where they were. (Bitmaps are too large to serialize, hence reload-from-Uri.)
  */
-@OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 class EditorViewModel(
     private val savedState: SavedStateHandle,
     private val loadImage: LoadImageUseCase,
     private val enhanceImage: EnhanceImageUseCase,
-    private val saveImage: SaveImageToGalleryUseCase,
+    private val exportImage: ExportImageUseCase,
     private val createCaptureUri: CreateCaptureUriUseCase,
+    private val memoryPolicy: MemoryPolicy,
     getFilters: GetFiltersUseCase,
 ) : ViewModel() {
 
@@ -67,47 +59,38 @@ class EditorViewModel(
     private val _effects = Channel<EditorEffect>(Channel.BUFFERED)
     val effects = _effects.receiveAsFlow()
 
-    /** Full-resolution source and a cheap downscaled copy used for live previews. */
+    /** Memory-bounded working source (high-res, but safe from OOM). */
     private var fullSource: Bitmap? = null
-    private var previewSource: Bitmap? = null
 
-    private val previewRequests = MutableSharedFlow<PipelineSettings>(
-        replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    private val commitRequests = MutableSharedFlow<PipelineSettings>(
+    /** Original image location, kept so Save can re-render it at full resolution. */
+    private var sourceUri: Uri? = null
+
+    private val renderRequests = MutableSharedFlow<PipelineSettings>(
         replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
     init {
-        // Fast preview stream (downscaled source) shown WHILE the finger drags.
-        // conflate() makes this "process only the latest": any intermediate slider
-        // values that arrive while a render is in flight are dropped, and the most
-        // recent one is rendered next — to completion, never cancelled. So every
-        // displayed frame reflects the newest finger position with no wasted work.
+        // Single render stream. The GPU processes the full (heap-bounded) working
+        // bitmap on every change, so there's no separate downscaled preview tier.
+        // conflate() => "process only the latest": intermediate values that arrive
+        // during a fast drag are dropped, and the newest renders to completion
+        // (never cancelled), so the shown frame always matches the finger.
         viewModelScope.launch {
-            previewRequests
+            renderRequests
                 .conflate()
                 .collect { settings ->
-                    val bmp = previewSource?.let {
-                        runCatching { enhanceImage(it, settings) }.getOrNull()
-                    }
-                    if (bmp != null) _state.value = _state.value.copy(processed = bmp)
-                }
-        }
-        // Final full-resolution stream (debounced so it only runs once settled).
-        viewModelScope.launch {
-            commitRequests
-                .debounce(100)
-                .onEach { _state.value = _state.value.copy(isProcessing = true) }
-                .mapLatest { settings ->
-                    fullSource?.let { runCatching { enhanceImage(it, settings) } }
-                }
-                .collect { result ->
-                    result?.onSuccess { bmp ->
-                        _state.value = _state.value.copy(processed = bmp, isProcessing = false)
-                    }?.onFailure {
-                        _state.value = _state.value.copy(isProcessing = false)
-                        _effects.send(EditorEffect.ShowMessage("Couldn't apply filter: ${it.message}"))
+                    _state.value = _state.value.copy(isProcessing = true)
+                    val result = fullSource?.let { runCatching { enhanceImage(it, settings) } }
+                    when {
+                        result == null -> _state.value = _state.value.copy(isProcessing = false)
+                        else -> result
+                            .onSuccess { bmp ->
+                                _state.value = _state.value.copy(processed = bmp, isProcessing = false)
+                            }
+                            .onFailure {
+                                _state.value = _state.value.copy(isProcessing = false)
+                                _effects.send(EditorEffect.ShowMessage("Couldn't apply filter: ${it.message}"))
+                            }
                     }
                 }
         }
@@ -122,7 +105,8 @@ class EditorViewModel(
                 savedState[KEY_SELECTED] = intent.filterId
             }
             is EditorIntent.ChangeFilterValue -> changeValue(intent.filterId, intent.value)
-            EditorIntent.CommitFilters -> commitRequests.tryEmit(_state.value.settings)
+            // Finger-up: a final render to guarantee the last value is applied.
+            EditorIntent.CommitFilters -> renderRequests.tryEmit(_state.value.settings)
             EditorIntent.Reset -> resetEdits()
             EditorIntent.Save -> save()
         }
@@ -135,23 +119,28 @@ class EditorViewModel(
         val settings = _state.value.settings.with(filterId, value)
         _state.value = _state.value.copy(settings = settings, isEdited = settings.isModified(filters))
         persistSettings(settings)
-        previewRequests.tryEmit(settings) // live preview; CommitFilters renders full-res
+        renderRequests.tryEmit(settings) // live, full-res, latest-only
     }
 
     private fun resetEdits() {
         _state.value = _state.value.copy(settings = PipelineSettings.EMPTY, isEdited = false)
         persistSettings(PipelineSettings.EMPTY)
-        commitRequests.tryEmit(PipelineSettings.EMPTY)
+        renderRequests.tryEmit(PipelineSettings.EMPTY)
     }
 
     private fun save() {
-        val bitmap = _state.value.processed ?: return
+        val uri = sourceUri ?: return
+        val settings = _state.value.settings
         viewModelScope.launch {
             _state.value = _state.value.copy(isSaving = true)
-            runCatching { saveImage(bitmap, "enhanced_${System.currentTimeMillis()}.jpg") }
-                .onSuccess {
+            // Re-render the ORIGINAL at the largest size the heap allows, so the
+            // saved file is full resolution (only gigapixel images get downscaled).
+            runCatching { exportImage(uri, settings, "enhanced_${System.currentTimeMillis()}.jpg") }
+                .onSuccess { result ->
                     _state.value = _state.value.copy(isSaving = false)
-                    _effects.send(EditorEffect.ShowMessage("Saved to gallery"))
+                    _effects.send(
+                        EditorEffect.ShowMessage("Saved ${result.width}×${result.height} to gallery"),
+                    )
                 }
                 .onFailure {
                     _state.value = _state.value.copy(isSaving = false)
@@ -163,12 +152,12 @@ class EditorViewModel(
     private fun loadFromUri(uri: Uri, restoredSettings: PipelineSettings?) {
         viewModelScope.launch {
             _state.value = _state.value.copy(isLoading = true)
-            runCatching { loadImage(uri) }
+            // Editing works on a heap-bounded copy — high res but safe from OOM.
+            runCatching { loadImage(uri, memoryPolicy.editingMaxPixels()) }
                 .onSuccess { bmp ->
+                    sourceUri = uri
                     fullSource?.recycle()
-                    previewSource?.takeIf { it !== fullSource }?.recycle()
                     fullSource = bmp
-                    previewSource = bmp.downscaled(PREVIEW_MAX_EDGE)
 
                     val settings = restoredSettings ?: PipelineSettings.EMPTY
                     _state.value = _state.value.copy(
@@ -180,7 +169,7 @@ class EditorViewModel(
                     )
                     savedState[KEY_URI] = uri.toString()
                     persistSettings(settings)
-                    if (settings.isModified(filters)) commitRequests.tryEmit(settings)
+                    if (settings.isModified(filters)) renderRequests.tryEmit(settings)
                 }
                 .onFailure {
                     _state.value = _state.value.copy(isLoading = false)
@@ -208,16 +197,8 @@ class EditorViewModel(
         return PipelineSettings(map.toMap())
     }
 
-    private fun Bitmap.downscaled(maxEdge: Int): Bitmap {
-        val longest = max(width, height)
-        if (longest <= maxEdge) return this
-        val scale = maxEdge.toFloat() / longest
-        return Bitmap.createScaledBitmap(this, (width * scale).toInt(), (height * scale).toInt(), true)
-    }
-
     override fun onCleared() {
         fullSource?.recycle()
-        previewSource?.takeIf { it !== fullSource }?.recycle()
         super.onCleared()
     }
 
@@ -225,8 +206,5 @@ class EditorViewModel(
         const val KEY_URI = "editor.uri"
         const val KEY_SETTINGS = "editor.settings"
         const val KEY_SELECTED = "editor.selected"
-
-        /** Live-preview working size; small enough to filter in a few ms. */
-        const val PREVIEW_MAX_EDGE = 1080
     }
 }

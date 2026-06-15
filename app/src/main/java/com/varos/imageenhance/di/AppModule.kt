@@ -1,17 +1,30 @@
 package com.varos.imageenhance.di
 
+import com.varos.imageenhance.data.filter.BlurFilter
 import com.varos.imageenhance.data.filter.BrightnessFilter
 import com.varos.imageenhance.data.filter.ContrastFilter
+import com.varos.imageenhance.data.filter.DenoiseFilter
+import com.varos.imageenhance.data.filter.DocumentScanFilter
+import com.varos.imageenhance.data.filter.EdgeEnhanceFilter
+import com.varos.imageenhance.data.filter.GlImageFilter
 import com.varos.imageenhance.data.filter.GrayscaleFilter
 import com.varos.imageenhance.data.filter.SharpenFilter
 import com.varos.imageenhance.data.filter.ThresholdFilter
-import com.varos.imageenhance.data.processor.FilterPipeline
+import com.varos.imageenhance.data.filter.cpu.CpuBrightnessFilter
+import com.varos.imageenhance.data.filter.cpu.CpuContrastFilter
+import com.varos.imageenhance.data.filter.cpu.CpuGrayscaleFilter
+import com.varos.imageenhance.data.filter.cpu.CpuImageFilter
+import com.varos.imageenhance.data.filter.cpu.CpuSharpenFilter
+import com.varos.imageenhance.data.filter.cpu.CpuThresholdFilter
+import com.varos.imageenhance.data.processor.CpuImageProcessor
+import com.varos.imageenhance.data.processor.GpuImageProcessor
 import com.varos.imageenhance.data.repository.AndroidImageRepository
-import com.varos.imageenhance.domain.model.ImageFilter
+import com.varos.imageenhance.domain.policy.MemoryPolicy
 import com.varos.imageenhance.domain.processor.ImageProcessor
 import com.varos.imageenhance.domain.repository.ImageRepository
 import com.varos.imageenhance.domain.usecase.CreateCaptureUriUseCase
 import com.varos.imageenhance.domain.usecase.EnhanceImageUseCase
+import com.varos.imageenhance.domain.usecase.ExportImageUseCase
 import com.varos.imageenhance.domain.usecase.GetFiltersUseCase
 import com.varos.imageenhance.domain.usecase.LoadImageUseCase
 import com.varos.imageenhance.domain.usecase.SaveImageToGalleryUseCase
@@ -21,38 +34,70 @@ import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.module
 
 /**
+ * Pluggable rendering backend. Flip this to swap the *entire* image-processing
+ * implementation — the UI, ViewModel and use cases are unaware which runs.
+ *
+ *  - `true`  → [GpuImageProcessor] (OpenGL ES via GPUImage), the full filter set.
+ *  - `false` → [CpuImageProcessor] (bitmap passes), a parallel CPU backend kept
+ *              in the codebase to prove the architecture is backend-agnostic and
+ *              extensible (a subset of filters, easily expanded).
+ */
+private const val USE_GPU = true
+
+/**
  * Single composition root. Dependencies flow one way; each layer stays unaware
  * of how its collaborators are built.
  *
- * === Adding a new image-processing functional ===
- * 1. Implement [ImageFilter] (e.g. extend ColorMatrixFilter, or write a pixel
- *    pass like SharpenFilter).
- * 2. Add it to the `filters` list below, in the position you want it to run.
- * It then automatically appears as a tab with its seek bar and joins the
- * pipeline. No UI, ViewModel, or state changes required.
+ * === Adding a new functional ===
+ * Implement `GlImageFilter` (GPU) and/or `CpuImageFilter` (CPU), then add it to
+ * the matching `filters` list below. It automatically becomes a tab with its
+ * seek bar and joins the pipeline — no UI/ViewModel/state changes.
+ *
+ * NOTE: only ONE `List<…Filter>` is registered at a time. Koin keys generics by
+ * erased KClass (`List`), so registering two list types would collide; the
+ * active backend's list also serves `GetFiltersUseCase`'s `List<ImageFilter>`
+ * (both `GlImageFilter` and `CpuImageFilter` are `ImageFilter`).
  */
 val appModule = module {
 
-    // ----- The registry of functionals (order = pipeline order = tab order).
-    // The one place to touch when adding a filter. Kept light and simple. -------
-    single<List<ImageFilter>> {
-        listOf(
-            BrightnessFilter(),
-            ContrastFilter(),
-            SharpenFilter(),
-            GrayscaleFilter(),
-            ThresholdFilter(),
-        )
+    // ----- Rendering backend (filters + processor), selected by USE_GPU --------
+    if (USE_GPU) {
+        single<List<GlImageFilter>> {
+            listOf(
+                BrightnessFilter(),
+                ContrastFilter(),
+                DenoiseFilter(),
+                SharpenFilter(),
+                EdgeEnhanceFilter(),
+                BlurFilter(),
+                GrayscaleFilter(),
+                ThresholdFilter(),
+                DocumentScanFilter(),
+            )
+        }
+        single<ImageProcessor> { GpuImageProcessor(androidContext(), filters = get()) }
+    } else {
+        single<List<CpuImageFilter>> {
+            listOf(
+                CpuBrightnessFilter(),
+                CpuContrastFilter(),
+                CpuSharpenFilter(),
+                CpuGrayscaleFilter(),
+                CpuThresholdFilter(),
+            )
+        }
+        single<ImageProcessor> { CpuImageProcessor(filters = get()) }
     }
 
-    // ----- Data -----
+    // ----- Data & policy -----
     single<ImageRepository> { AndroidImageRepository(androidContext()) }
-    single<ImageProcessor> { FilterPipeline(filters = get()) }
+    single { MemoryPolicy() }
 
     // ----- Use cases -----
     factory { LoadImageUseCase(get()) }
     factory { EnhanceImageUseCase(get()) }
     factory { SaveImageToGalleryUseCase(get()) }
+    factory { ExportImageUseCase(get(), get(), get(), get()) }
     factory { CreateCaptureUriUseCase(get()) }
     factory { GetFiltersUseCase(get()) }
 

@@ -15,7 +15,6 @@ import com.varos.imageenhance.domain.repository.ImageRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
-import kotlin.math.max
 
 /**
  * [ImageRepository] backed by ContentResolver, EXIF and MediaStore.
@@ -38,7 +37,7 @@ class AndroidImageRepository(
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }
 
-    override suspend fun loadBitmap(uri: Uri, maxEdge: Int): Bitmap =
+    override suspend fun loadBitmap(uri: Uri, maxPixels: Long): Bitmap =
         withContext(Dispatchers.IO) {
             // Pass 1: read bounds only to compute a safe downsample factor.
             // Note: with inJustDecodeBounds, decodeStream always returns null and
@@ -53,7 +52,7 @@ class AndroidImageRepository(
             }
 
             val options = BitmapFactory.Options().apply {
-                inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxEdge)
+                inSampleSize = sampleForPixels(bounds.outWidth, bounds.outHeight, maxPixels)
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             val decoded = (resolver.openInputStream(uri)
@@ -95,11 +94,15 @@ class AndroidImageRepository(
             item
         }
 
-    private fun sampleSizeFor(width: Int, height: Int, maxEdge: Int): Int {
+    /**
+     * Smallest power-of-2 sample size so the decoded bitmap fits [maxPixels].
+     * Pixel-based (not edge-based) so the memory bound holds for any aspect
+     * ratio — including extreme panoramas / gigapixel maps.
+     */
+    private fun sampleForPixels(width: Int, height: Int, maxPixels: Long): Int {
+        val total = width.toLong() * height.toLong()
         var sample = 1
-        var longest = max(width, height)
-        while (longest / 2 >= maxEdge) {
-            longest /= 2
+        while (total / (sample.toLong() * sample.toLong()) > maxPixels) {
             sample *= 2
         }
         return sample
