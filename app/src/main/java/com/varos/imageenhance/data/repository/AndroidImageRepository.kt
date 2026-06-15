@@ -37,6 +37,13 @@ class AndroidImageRepository(
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }
 
+    override suspend fun readPixelCount(uri: Uri): Long = withContext(Dispatchers.IO) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) 0L
+        else bounds.outWidth.toLong() * bounds.outHeight.toLong()
+    }
+
     override suspend fun loadBitmap(uri: Uri, maxPixels: Long): Bitmap =
         withContext(Dispatchers.IO) {
             // Pass 1: read bounds only to compute a safe downsample factor.

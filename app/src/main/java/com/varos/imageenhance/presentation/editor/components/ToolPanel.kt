@@ -19,7 +19,6 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Deblur
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.FilterBAndW
 import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.Tune
@@ -122,7 +121,6 @@ private fun iconFor(filterId: String): ImageVector = when (filterId) {
     "edge" -> Icons.Filled.BorderOuter
     "blur" -> Icons.Filled.BlurOn
     "grayscale" -> Icons.Filled.Gradient
-    "threshold" -> Icons.Filled.FilterBAndW
     "document" -> Icons.Filled.Description
     else -> Icons.Filled.Tune
 }

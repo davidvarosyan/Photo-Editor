@@ -16,6 +16,9 @@ interface ImageRepository {
      */
     suspend fun loadBitmap(uri: Uri, maxPixels: Long): Bitmap
 
+    /** Total pixel count of the image at [uri] (decodes bounds only — cheap). */
+    suspend fun readPixelCount(uri: Uri): Long
+
     /** Saves [bitmap] to the device's shared Pictures collection, returning its Uri. */
     suspend fun saveToGallery(bitmap: Bitmap, displayName: String): Uri
 

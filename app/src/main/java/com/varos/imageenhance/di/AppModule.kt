@@ -9,13 +9,11 @@ import com.varos.imageenhance.data.filter.gpu.EdgeEnhanceFilter
 import com.varos.imageenhance.data.filter.gpu.GlImageFilter
 import com.varos.imageenhance.data.filter.gpu.GrayscaleFilter
 import com.varos.imageenhance.data.filter.gpu.SharpenFilter
-import com.varos.imageenhance.data.filter.gpu.ThresholdFilter
 import com.varos.imageenhance.data.filter.cpu.CpuBrightnessFilter
 import com.varos.imageenhance.data.filter.cpu.CpuContrastFilter
 import com.varos.imageenhance.data.filter.cpu.CpuGrayscaleFilter
 import com.varos.imageenhance.data.filter.cpu.CpuImageFilter
 import com.varos.imageenhance.data.filter.cpu.CpuSharpenFilter
-import com.varos.imageenhance.data.filter.cpu.CpuThresholdFilter
 import com.varos.imageenhance.data.processor.CpuImageProcessor
 import com.varos.imageenhance.data.processor.GpuImageProcessor
 import com.varos.imageenhance.data.repository.AndroidImageRepository
@@ -24,9 +22,9 @@ import com.varos.imageenhance.domain.processor.ImageProcessor
 import com.varos.imageenhance.domain.repository.ImageRepository
 import com.varos.imageenhance.domain.usecase.CreateCaptureUriUseCase
 import com.varos.imageenhance.domain.usecase.EnhanceImageUseCase
-import com.varos.imageenhance.domain.usecase.ExportImageUseCase
 import com.varos.imageenhance.domain.usecase.GetFiltersUseCase
 import com.varos.imageenhance.domain.usecase.LoadImageUseCase
+import com.varos.imageenhance.domain.usecase.SaveEditedImageUseCase
 import com.varos.imageenhance.domain.usecase.SaveImageToGalleryUseCase
 import com.varos.imageenhance.presentation.editor.EditorViewModel
 import org.koin.android.ext.koin.androidContext
@@ -71,7 +69,6 @@ val appModule = module {
                 EdgeEnhanceFilter(),
                 BlurFilter(),
                 GrayscaleFilter(),
-                ThresholdFilter(),
                 DocumentScanFilter(),
             )
         }
@@ -83,7 +80,6 @@ val appModule = module {
                 CpuContrastFilter(),
                 CpuSharpenFilter(),
                 CpuGrayscaleFilter(),
-                CpuThresholdFilter(),
             )
         }
         single<ImageProcessor> { CpuImageProcessor(filters = get()) }
@@ -97,7 +93,7 @@ val appModule = module {
     factory { LoadImageUseCase(get()) }
     factory { EnhanceImageUseCase(get()) }
     factory { SaveImageToGalleryUseCase(get()) }
-    factory { ExportImageUseCase(get(), get(), get(), get()) }
+    factory { SaveEditedImageUseCase(get(), get()) }
     factory { CreateCaptureUriUseCase(get()) }
     factory { GetFiltersUseCase(get()) }
 

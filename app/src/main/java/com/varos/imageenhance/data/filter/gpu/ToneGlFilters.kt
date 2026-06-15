@@ -7,20 +7,24 @@ import jp.co.cyberagent.android.gpuimage.filter.GPUImageFilter
 import jp.co.cyberagent.android.gpuimage.filter.GPUImageGrayscaleFilter
 import kotlin.math.roundToInt
 
-/** Brightness, value -1..1 (0 = neutral) — maps directly to GPUImage. */
+/**
+ * Brightness. GPUImage's usable range is -1..1 where ±1 is solid black/white, so
+ * we cap it at ±0.5 (a meaningful adjustment) and display it as a natural
+ * -100..100 to the user.
+ */
 class BrightnessFilter : GlImageFilter {
     override val id = "brightness"
     override val displayName = "Brightness"
-    override val parameter = FilterParameter(min = -1f, max = 1f, default = 0f, neutral = 0f)
-    override fun format(value: Float) = (value * 100).roundToInt().toString()
+    override val parameter = FilterParameter(min = -0.5f, max = 0.5f, default = 0f, neutral = 0f)
+    override fun format(value: Float) = (value * 200).roundToInt().toString()
     override fun gpuFilter(value: Float): GPUImageFilter = GPUImageBrightnessFilter(value)
 }
 
-/** Contrast, value 0.5..2.5 (1 = neutral). */
+/** Contrast, kept to a tasteful 0.6..1.8 (1 = neutral). */
 class ContrastFilter : GlImageFilter {
     override val id = "contrast"
     override val displayName = "Contrast"
-    override val parameter = FilterParameter(min = 0.5f, max = 2.5f, default = 1f, neutral = 1f)
+    override val parameter = FilterParameter(min = 0.6f, max = 1.8f, default = 1f, neutral = 1f)
     override fun format(value: Float) = String.format("%.2f", value)
     override fun gpuFilter(value: Float): GPUImageFilter = GPUImageContrastFilter(value)
 }

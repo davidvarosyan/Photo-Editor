@@ -49,6 +49,9 @@ sealed interface EditorIntent {
 
     data object Reset : EditorIntent
     data object Save : EditorIntent
+
+    /** Discard the current image and return to the picker (empty) state. */
+    data object ClearImage : EditorIntent
 }
 
 sealed interface EditorEffect {

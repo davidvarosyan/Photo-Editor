@@ -11,9 +11,9 @@ import com.varos.imageenhance.domain.model.PipelineSettings
 import com.varos.imageenhance.domain.policy.MemoryPolicy
 import com.varos.imageenhance.domain.usecase.CreateCaptureUriUseCase
 import com.varos.imageenhance.domain.usecase.EnhanceImageUseCase
-import com.varos.imageenhance.domain.usecase.ExportImageUseCase
 import com.varos.imageenhance.domain.usecase.GetFiltersUseCase
 import com.varos.imageenhance.domain.usecase.LoadImageUseCase
+import com.varos.imageenhance.domain.usecase.SaveEditedImageUseCase
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,7 +43,7 @@ class EditorViewModel(
     private val savedState: SavedStateHandle,
     private val loadImage: LoadImageUseCase,
     private val enhanceImage: EnhanceImageUseCase,
-    private val exportImage: ExportImageUseCase,
+    private val saveEditedImage: SaveEditedImageUseCase,
     private val createCaptureUri: CreateCaptureUriUseCase,
     private val memoryPolicy: MemoryPolicy,
     getFilters: GetFiltersUseCase,
@@ -109,7 +109,19 @@ class EditorViewModel(
             EditorIntent.CommitFilters -> renderRequests.tryEmit(_state.value.settings)
             EditorIntent.Reset -> resetEdits()
             EditorIntent.Save -> save()
+            EditorIntent.ClearImage -> clearImage()
         }
+    }
+
+    /** Discards the current image/edits and returns to the picker (empty) state. */
+    private fun clearImage() {
+        fullSource?.recycle()
+        fullSource = null
+        sourceUri = null
+        savedState[KEY_URI] = null
+        savedState[KEY_SETTINGS] = null
+        savedState[KEY_PENDING_CAPTURE] = null
+        reduce { EditorState(selectedFilterId = filters.firstOrNull()?.id.orEmpty()) }
     }
 
     /**
@@ -143,13 +155,15 @@ class EditorViewModel(
     }
 
     private fun save() {
-        val uri = sourceUri ?: return
-        val settings = _state.value.settings
+        // Save what's on screen, upscaled back to the original resolution. Editing
+        // runs on a small working copy for smoothness; the saved file is that exact
+        // rendered result scaled to the source's size — visually identical to the
+        // preview, at original dimensions.
+        val bitmap = _state.value.processed ?: return
         viewModelScope.launch {
             reduce { it.copy(isSaving = true) }
-            // Re-render the ORIGINAL at the largest size the heap allows, so the
-            // saved file is full resolution (only gigapixel images get downscaled).
-            runCatching { exportImage(uri, settings, "enhanced_${System.currentTimeMillis()}.jpg") }
+            val name = "enhanced_${System.currentTimeMillis()}.jpg"
+            runCatching { saveEditedImage(bitmap, sourceUri, name, memoryPolicy.saveMaxPixels()) }
                 .onSuccess { result ->
                     reduce { it.copy(isSaving = false) }
                     _effects.send(

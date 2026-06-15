@@ -26,8 +26,8 @@ abstract class CpuColorMatrixFilter : CpuImageFilter {
 class CpuBrightnessFilter : CpuColorMatrixFilter() {
     override val id = "brightness"
     override val displayName = "Brightness"
-    override val parameter = FilterParameter(min = -1f, max = 1f, default = 0f, neutral = 0f)
-    override fun format(value: Float) = (value * 100).roundToInt().toString()
+    override val parameter = FilterParameter(min = -0.5f, max = 0.5f, default = 0f, neutral = 0f)
+    override fun format(value: Float) = (value * 200).roundToInt().toString()
     override fun matrixFor(value: Float): ColorMatrix {
         val b = value * 255f
         return ColorMatrix(
@@ -44,7 +44,7 @@ class CpuBrightnessFilter : CpuColorMatrixFilter() {
 class CpuContrastFilter : CpuColorMatrixFilter() {
     override val id = "contrast"
     override val displayName = "Contrast"
-    override val parameter = FilterParameter(min = 0.5f, max = 2.5f, default = 1f, neutral = 1f)
+    override val parameter = FilterParameter(min = 0.6f, max = 1.8f, default = 1f, neutral = 1f)
     override fun format(value: Float) = String.format("%.2f", value)
     override fun matrixFor(value: Float): ColorMatrix {
         val t = (-0.5f * value + 0.5f) * 255f

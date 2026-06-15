@@ -48,32 +48,3 @@ class CpuSharpenFilter : CpuImageFilter {
         v < 0f -> 0; v > 255f -> 255; else -> v.toInt()
     }
 }
-
-/** CPU global luminance threshold (B&W), value 0..1; 0 = neutral (skipped). */
-class CpuThresholdFilter : CpuImageFilter {
-    override val id = "threshold"
-    override val displayName = "B&W"
-    override val parameter = FilterParameter(min = 0f, max = 1f, default = 0f, neutral = 0f)
-    override fun format(value: Float) = (value * 100).roundToInt().toString()
-
-    override suspend fun apply(input: Bitmap, value: Float): Bitmap {
-        val threshold = (value * 255f).toInt()
-        val w = input.width
-        val h = input.height
-        val px = IntArray(w * h)
-        input.getPixels(px, 0, w, 0, 0, w, h)
-        for (y in 0 until h) {
-            currentCoroutineContext().ensureActive()
-            val row = y * w
-            for (x in 0 until w) {
-                val i = row + x
-                val p = px[i]
-                val lum = (0.299f * ((p shr 16) and 0xFF) +
-                    0.587f * ((p shr 8) and 0xFF) +
-                    0.114f * (p and 0xFF)).toInt()
-                px[i] = if (lum >= threshold) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
-            }
-        }
-        return createBitmap(w, h).apply { setPixels(px, 0, w, 0, 0, w, h) }
-    }
-}
