@@ -1,4 +1,4 @@
-package com.varos.imageenhance.data.filter
+package com.varos.imageenhance.data.filter.gpu
 
 import android.opengl.GLES20
 import jp.co.cyberagent.android.gpuimage.filter.GPUImageFilter

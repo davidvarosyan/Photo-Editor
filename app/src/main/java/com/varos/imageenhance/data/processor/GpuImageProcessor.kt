@@ -2,7 +2,7 @@ package com.varos.imageenhance.data.processor
 
 import android.content.Context
 import android.graphics.Bitmap
-import com.varos.imageenhance.data.filter.GlImageFilter
+import com.varos.imageenhance.data.filter.gpu.GlImageFilter
 import com.varos.imageenhance.domain.processor.ImageProcessor
 import com.varos.imageenhance.domain.model.PipelineSettings
 import jp.co.cyberagent.android.gpuimage.GPUImage

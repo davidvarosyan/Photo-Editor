@@ -1,4 +1,4 @@
-package com.varos.imageenhance.data.filter
+package com.varos.imageenhance.data.filter.gpu
 
 import com.varos.imageenhance.domain.model.FilterParameter
 import jp.co.cyberagent.android.gpuimage.filter.GPUImageFilter

@@ -1,15 +1,15 @@
 package com.varos.imageenhance.di
 
-import com.varos.imageenhance.data.filter.BlurFilter
-import com.varos.imageenhance.data.filter.BrightnessFilter
-import com.varos.imageenhance.data.filter.ContrastFilter
-import com.varos.imageenhance.data.filter.DenoiseFilter
-import com.varos.imageenhance.data.filter.DocumentScanFilter
-import com.varos.imageenhance.data.filter.EdgeEnhanceFilter
-import com.varos.imageenhance.data.filter.GlImageFilter
-import com.varos.imageenhance.data.filter.GrayscaleFilter
-import com.varos.imageenhance.data.filter.SharpenFilter
-import com.varos.imageenhance.data.filter.ThresholdFilter
+import com.varos.imageenhance.data.filter.gpu.BlurFilter
+import com.varos.imageenhance.data.filter.gpu.BrightnessFilter
+import com.varos.imageenhance.data.filter.gpu.ContrastFilter
+import com.varos.imageenhance.data.filter.gpu.DenoiseFilter
+import com.varos.imageenhance.data.filter.gpu.DocumentScanFilter
+import com.varos.imageenhance.data.filter.gpu.EdgeEnhanceFilter
+import com.varos.imageenhance.data.filter.gpu.GlImageFilter
+import com.varos.imageenhance.data.filter.gpu.GrayscaleFilter
+import com.varos.imageenhance.data.filter.gpu.SharpenFilter
+import com.varos.imageenhance.data.filter.gpu.ThresholdFilter
 import com.varos.imageenhance.data.filter.cpu.CpuBrightnessFilter
 import com.varos.imageenhance.data.filter.cpu.CpuContrastFilter
 import com.varos.imageenhance.data.filter.cpu.CpuGrayscaleFilter
