@@ -1,17 +1,28 @@
 package com.varos.imageenhance.data.filter.gpu
 
 import com.varos.imageenhance.domain.model.ImageFilter
-import jp.co.cyberagent.android.gpuimage.filter.GPUImageFilter
 
 /**
- * A GPU-backed filter: domain [ImageFilter] metadata plus a factory that builds
- * the configured GPUImage fragment-shader filter for a given value.
+ * A GPU filter implemented as a single OpenGL ES fragment shader (run by our own
+ * [com.varos.imageenhance.data.processor.GlImageProcessor] — no third-party GL
+ * library). The renderer supplies the standard uniforms every shader can use:
  *
- * Keeping the GPU type (GPUImageFilter) here in the data layer keeps the domain
- * pure. The processor ([com.varos.imageenhance.data.processor.GpuImageProcessor])
- * composes these into a single GLES filter group and renders them off-screen.
+ *  - `sampler2D uTexture`  — the input image
+ *  - `float uValue`        — this filter's current value
+ *  - `vec2 uTexelSize`     — (1/width, 1/height), for neighbour sampling
+ *  - `varying vec2 vTex`   — the texture coordinate
+ *
+ * So a new filter is just metadata + a shader string.
  */
 interface GlImageFilter : ImageFilter {
-    /** Builds the GLES filter for [value]; only called when the value is non-neutral. */
-    fun gpuFilter(value: Float): GPUImageFilter
+    val fragmentShader: String
 }
+
+/** Common shader preamble shared by all filters. */
+const val SHADER_HEADER = """
+    precision highp float;
+    uniform sampler2D uTexture;
+    uniform float uValue;
+    uniform vec2 uTexelSize;
+    varying vec2 vTex;
+"""

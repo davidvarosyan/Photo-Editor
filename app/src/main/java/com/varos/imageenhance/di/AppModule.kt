@@ -15,7 +15,7 @@ import com.varos.imageenhance.data.filter.cpu.CpuGrayscaleFilter
 import com.varos.imageenhance.data.filter.cpu.CpuImageFilter
 import com.varos.imageenhance.data.filter.cpu.CpuSharpenFilter
 import com.varos.imageenhance.data.processor.CpuImageProcessor
-import com.varos.imageenhance.data.processor.GpuImageProcessor
+import com.varos.imageenhance.data.processor.GlImageProcessor
 import com.varos.imageenhance.data.repository.AndroidImageRepository
 import com.varos.imageenhance.domain.policy.MemoryPolicy
 import com.varos.imageenhance.domain.processor.ImageProcessor
@@ -72,7 +72,7 @@ val appModule = module {
                 DocumentScanFilter(),
             )
         }
-        single<ImageProcessor> { GpuImageProcessor(filters = get()) }
+        single<ImageProcessor> { GlImageProcessor(filters = get()) }
     } else {
         single<List<CpuImageFilter>> {
             listOf(

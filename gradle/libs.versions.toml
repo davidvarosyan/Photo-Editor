@@ -12,7 +12,6 @@ lifecycleViewmodelCompose = "2.10.0"
 coroutines = "1.10.2"
 exifinterface = "1.4.1"
 koin = "4.0.2"
-gpuimage = "2.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,7 +34,6 @@ androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterfa
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 koin-android = { group = "io.insert-koin", name = "koin-android", version.ref = "koin" }
 koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compose", version.ref = "koin" }
-gpuimage = { group = "jp.co.cyberagent.android", name = "gpuimage", version.ref = "gpuimage" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
