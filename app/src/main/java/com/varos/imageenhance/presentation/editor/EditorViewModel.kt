@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -79,16 +80,14 @@ class EditorViewModel(
             renderRequests
                 .conflate()
                 .collect { settings ->
-                    _state.value = _state.value.copy(isProcessing = true)
+                    reduce { it.copy(isProcessing = true) }
                     val result = fullSource?.let { runCatching { enhanceImage(it, settings) } }
                     when {
-                        result == null -> _state.value = _state.value.copy(isProcessing = false)
+                        result == null -> reduce { it.copy(isProcessing = false) }
                         else -> result
-                            .onSuccess { bmp ->
-                                _state.value = _state.value.copy(processed = bmp, isProcessing = false)
-                            }
+                            .onSuccess { bmp -> reduce { it.copy(processed = bmp, isProcessing = false) } }
                             .onFailure {
-                                _state.value = _state.value.copy(isProcessing = false)
+                                reduce { it.copy(isProcessing = false) }
                                 _effects.send(EditorEffect.ShowMessage("Couldn't apply filter: ${it.message}"))
                             }
                     }
@@ -101,7 +100,7 @@ class EditorViewModel(
         when (intent) {
             is EditorIntent.PickImage -> loadFromUri(intent.uri, restoredSettings = null)
             is EditorIntent.SelectFilter -> {
-                _state.value = _state.value.copy(selectedFilterId = intent.filterId)
+                reduce { it.copy(selectedFilterId = intent.filterId) }
                 savedState[KEY_SELECTED] = intent.filterId
             }
             is EditorIntent.ChangeFilterValue -> changeValue(intent.filterId, intent.value)
@@ -117,13 +116,13 @@ class EditorViewModel(
 
     private fun changeValue(filterId: String, value: Float) {
         val settings = _state.value.settings.with(filterId, value)
-        _state.value = _state.value.copy(settings = settings, isEdited = settings.isModified(filters))
+        reduce { it.copy(settings = settings, isEdited = settings.isModified(filters)) }
         persistSettings(settings)
         renderRequests.tryEmit(settings) // live, full-res, latest-only
     }
 
     private fun resetEdits() {
-        _state.value = _state.value.copy(settings = PipelineSettings.EMPTY, isEdited = false)
+        reduce { it.copy(settings = PipelineSettings.EMPTY, isEdited = false) }
         persistSettings(PipelineSettings.EMPTY)
         renderRequests.tryEmit(PipelineSettings.EMPTY)
     }
@@ -132,18 +131,18 @@ class EditorViewModel(
         val uri = sourceUri ?: return
         val settings = _state.value.settings
         viewModelScope.launch {
-            _state.value = _state.value.copy(isSaving = true)
+            reduce { it.copy(isSaving = true) }
             // Re-render the ORIGINAL at the largest size the heap allows, so the
             // saved file is full resolution (only gigapixel images get downscaled).
             runCatching { exportImage(uri, settings, "enhanced_${System.currentTimeMillis()}.jpg") }
                 .onSuccess { result ->
-                    _state.value = _state.value.copy(isSaving = false)
+                    reduce { it.copy(isSaving = false) }
                     _effects.send(
                         EditorEffect.ShowMessage("Saved ${result.width}×${result.height} to gallery"),
                     )
                 }
                 .onFailure {
-                    _state.value = _state.value.copy(isSaving = false)
+                    reduce { it.copy(isSaving = false) }
                     _effects.send(EditorEffect.ShowMessage("Save failed: ${it.message}"))
                 }
         }
@@ -151,7 +150,7 @@ class EditorViewModel(
 
     private fun loadFromUri(uri: Uri, restoredSettings: PipelineSettings?) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(isLoading = true)
+            reduce { it.copy(isLoading = true) }
             // Editing works on a heap-bounded copy — high res but safe from OOM.
             runCatching { loadImage(uri, memoryPolicy.editingMaxPixels()) }
                 .onSuccess { bmp ->
@@ -160,19 +159,21 @@ class EditorViewModel(
                     fullSource = bmp
 
                     val settings = restoredSettings ?: PipelineSettings.EMPTY
-                    _state.value = _state.value.copy(
-                        original = bmp,
-                        processed = bmp,
-                        settings = settings,
-                        isLoading = false,
-                        isEdited = settings.isModified(filters),
-                    )
+                    reduce {
+                        it.copy(
+                            original = bmp,
+                            processed = bmp,
+                            settings = settings,
+                            isLoading = false,
+                            isEdited = settings.isModified(filters),
+                        )
+                    }
                     savedState[KEY_URI] = uri.toString()
                     persistSettings(settings)
                     if (settings.isModified(filters)) renderRequests.tryEmit(settings)
                 }
                 .onFailure {
-                    _state.value = _state.value.copy(isLoading = false)
+                    reduce { it.copy(isLoading = false) }
                     _effects.send(EditorEffect.ShowMessage("Couldn't load image: ${it.message}"))
                 }
         }
@@ -180,12 +181,16 @@ class EditorViewModel(
 
     private fun restoreFromSavedState() {
         val uri = savedState.get<String>(KEY_URI)?.toUri() ?: return
-        _state.value = _state.value.copy(
-            selectedFilterId = savedState.get<String>(KEY_SELECTED)
-                ?: _state.value.selectedFilterId,
-        )
+        savedState.get<String>(KEY_SELECTED)?.let { id -> reduce { it.copy(selectedFilterId = id) } }
         loadFromUri(uri, restoredSettings = readSavedSettings())
     }
+
+    /**
+     * The single point that mutates state — an atomic compare-and-set (so the
+     * render/save/load coroutines never clobber each other's updates). This is
+     * the functional "reducer" seam: `(EditorState) -> EditorState`.
+     */
+    private inline fun reduce(transform: (EditorState) -> EditorState) = _state.update(transform)
 
     private fun persistSettings(settings: PipelineSettings) {
         savedState[KEY_SETTINGS] = HashMap(settings.values)

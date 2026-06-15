@@ -235,8 +235,11 @@ private fun LoadedEditor(
                     Text("Reset")
                 }
                 Button(
+                    // Not gated on isProcessing: Save re-renders from the original,
+                    // independent of the live preview, so it must not blink while
+                    // a seek bar is being dragged.
                     onClick = { onIntent(EditorIntent.Save) },
-                    enabled = !state.isSaving && !state.isProcessing,
+                    enabled = !state.isSaving,
                     modifier = Modifier.weight(1f),
                 ) {
                     if (state.isSaving) {

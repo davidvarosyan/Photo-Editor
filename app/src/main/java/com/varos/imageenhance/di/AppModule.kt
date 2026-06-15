@@ -75,7 +75,7 @@ val appModule = module {
                 DocumentScanFilter(),
             )
         }
-        single<ImageProcessor> { GpuImageProcessor(androidContext(), filters = get()) }
+        single<ImageProcessor> { GpuImageProcessor(filters = get()) }
     } else {
         single<List<CpuImageFilter>> {
             listOf(
