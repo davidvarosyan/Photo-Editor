@@ -19,10 +19,15 @@ import java.util.concurrent.Executors
  *
  * Performance: a single EGL context ([PixelBuffer]) and [GPUImageRenderer] are
  * **reused across renders** instead of allocating a fresh `GPUImage`/EGL context
- * every call (the dominant per-frame cost). The buffer is only recreated when the
- * image dimensions change (e.g. switching between the editing copy and a full-res
- * export). All GL work is pinned to one dedicated thread so the context stays
- * valid — required by EGL/`PixelBuffer` thread affinity.
+ * every call (the dominant per-frame cost). The context+renderer are recreated
+ * together only when the image dimensions change (e.g. switching between the
+ * editing copy and a full-res export). All GL work is pinned to one dedicated
+ * thread so the context stays valid — required by EGL/`PixelBuffer` affinity.
+ *
+ * IMPORTANT: the renderer's GL objects (shader programs, textures) belong to the
+ * EGL context they were created in. So when the [PixelBuffer]'s context is torn
+ * down, the [GPUImageRenderer] MUST be recreated with it — reusing a renderer
+ * across contexts renders garbage (solid colour).
  *
  * The input is assumed to already fit a safe GL texture size (the caller bounds
  * it through MemoryPolicy), so no tiling is needed.
@@ -36,8 +41,8 @@ class GpuImageProcessor(
         Executors.newSingleThreadExecutor { r -> Thread(r, "gpu-render").apply { isDaemon = true } }
             .asCoroutineDispatcher()
 
-    private val renderer = GPUImageRenderer(GPUImageFilter())
     private var pixelBuffer: PixelBuffer? = null
+    private var renderer: GPUImageRenderer? = null
     private var bufferWidth = -1
     private var bufferHeight = -1
 
@@ -46,18 +51,24 @@ class GpuImageProcessor(
             val active = filters.filter { !it.isNeutral(settings.valueOf(it)) }
             if (active.isEmpty()) return@withContext source
 
-            ensureBuffer(source.width, source.height)
+            val renderer = ensureContext(source.width, source.height)
             renderer.setFilter(GPUImageFilterGroup(active.map { it.gpuFilter(settings.valueOf(it)) }))
             renderer.setImageBitmap(source, false) // false = don't recycle the source
             pixelBuffer!!.bitmap
         }
 
-    /** Reuses the EGL context/buffer; only rebuilds it when the size changes. */
-    private fun ensureBuffer(width: Int, height: Int) {
-        if (pixelBuffer != null && bufferWidth == width && bufferHeight == height) return
+    /**
+     * Returns the renderer bound to a buffer of [width]x[height], reusing it when
+     * the size is unchanged and recreating both context AND renderer otherwise.
+     */
+    private fun ensureContext(width: Int, height: Int): GPUImageRenderer {
+        renderer?.let { if (bufferWidth == width && bufferHeight == height) return it }
         pixelBuffer?.destroy()
-        pixelBuffer = PixelBuffer(width, height).also { it.setRenderer(renderer) }
+        val newRenderer = GPUImageRenderer(GPUImageFilter())
+        pixelBuffer = PixelBuffer(width, height).also { it.setRenderer(newRenderer) }
+        renderer = newRenderer
         bufferWidth = width
         bufferHeight = height
+        return newRenderer
     }
 }

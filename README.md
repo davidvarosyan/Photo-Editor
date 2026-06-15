@@ -19,10 +19,11 @@ without sending anything to a server.
    permission needed) or "Take a photo" (system camera via `FileProvider`).
 2. **Editor** → an interactive **before/after wipe slider** fills the top of the
    screen. Drag the handle to compare original vs. enhanced.
-3. **Tool tabs** at the bottom — Brightness, Contrast, Sharpen, Grayscale, B&W —
-   each tab exposes a single **seek bar** (plus a toggle for the on/off
-   operations). The controls panel is a **fixed height**, so the preview
-   viewport keeps exactly the same size when you switch tabs (no jump/reflow).
+3. **Tool tabs** at the bottom — Brightness, Contrast, Denoise, Sharpen, Edges,
+   Blur, Grayscale, B&W, Document — each tab exposes a single **seek bar** (plus
+   a toggle for the on/off operations). The controls panel is a **fixed height**,
+   so the preview viewport keeps exactly the same size when you switch tabs (no
+   jump/reflow).
 4. **Save** writes the result to the gallery (`Pictures/ImageEnhance`); **Reset**
    returns to the untouched original; the camera/Replace actions swap the image.
 
@@ -37,7 +38,7 @@ and the layout stable.
 (OpenGL ES fragment shaders). All enabled filters run as a single GLES filter
 group in one upload → multi-pass → readback, off-screen, off the main thread
 ([`GpuImageProcessor`](app/src/main/java/com/varos/imageenhance/data/processor/GpuImageProcessor.kt)).
-Each step is a [`GlImageFilter`](app/src/main/java/com/varos/imageenhance/data/filter/GlImageFilter.kt)
+Each step is a [`GlImageFilter`](app/src/main/java/com/varos/imageenhance/data/filter/gpu/GlImageFilter.kt)
 (domain metadata + a GPUImage filter factory), applied in registration order:
 
 1. **Brightness** — `GPUImageBrightnessFilter`.
@@ -49,13 +50,15 @@ Each step is a [`GlImageFilter`](app/src/main/java/com/varos/imageenhance/data/f
 7. **Grayscale** — `GPUImageGrayscaleFilter` (toggle).
 8. **B&W** — `GPUImageLuminanceThresholdFilter` (one knob doubles as on/off).
 9. **Document** — custom GLES adaptive threshold
-   ([`GpuAdaptiveThresholdFilter`](app/src/main/java/com/varos/imageenhance/data/filter/GpuAdaptiveThresholdFilter.kt)):
+   ([`GpuAdaptiveThresholdFilter`](app/src/main/java/com/varos/imageenhance/data/filter/gpu/GpuAdaptiveThresholdFilter.kt)):
    each pixel vs its 5×5 local mean, so uneven lighting binarizes cleanly (toggle).
 
 Adding a filter is two steps (implement `GlImageFilter`, add it to the list in
 `appModule`) — UI tabs, seek bars and the pipeline are all generic over the
 interface. The domain `ImageFilter` stays pure (no GPU types); the GPU factory
-lives in the data layer.
+lives in the data layer. A parallel CPU backend (`CpuImageFilter` +
+[`CpuImageProcessor`](app/src/main/java/com/varos/imageenhance/data/processor/CpuImageProcessor.kt))
+implements the same contract, selectable with one flag (see below).
 
 ## Architecture
 
@@ -66,14 +69,15 @@ roles, so the structure is predictable:
 ```
 domain/                     ← pure (no Android UI deps)
   model/                    ImageFilter, FilterParameter, PipelineSettings
-  repository/               ImageRepository
+  policy/                   MemoryPolicy
   processor/                ImageProcessor
-  usecase/                  LoadImage, EnhanceImage, SaveImageToGallery,
-                            CreateCaptureUri, GetFilters  (one file each)
+  repository/               ImageRepository
+  usecase/                  LoadImage, EnhanceImage, ExportImage,
+                            SaveImageToGallery, CreateCaptureUri, GetFilters
 data/                       ← framework implementations
-  filter/                   BrightnessFilter, ContrastFilter, SharpenFilter,
-                            GrayscaleFilter, ThresholdFilter, ColorMatrixFilter
-  processor/                FilterPipeline
+  filter/gpu/               GlImageFilter + GPUImage filters + GpuAdaptiveThreshold
+  filter/cpu/               CpuImageFilter + CPU bitmap-pass filters
+  processor/                GpuImageProcessor, CpuImageProcessor
   repository/               AndroidImageRepository
 di/                         appModule  ← single Koin composition root
 presentation/
@@ -91,6 +95,10 @@ presentation/
   `viewModel.onIntent(...)`; the ViewModel is the single owner/mutator of state.
 - **Effect** — `EditorEffect` (sealed), one-shot side effects (snackbar
   messages) delivered over a `Channel`, kept out of persistent state.
+- **Reducer** — every mutation goes through one `reduce { it.copy(...) }` helper
+  backed by `MutableStateFlow.update {}` (atomic compare-and-set), so the
+  concurrent render/save/load coroutines never clobber each other's updates.
+  That's the functional `(EditorState) -> EditorState` seam.
 
 ### Live rendering (responsive seek bars)
 
@@ -100,6 +108,10 @@ A single stream uses **`conflate()`**, which "processes only the latest": any
 intermediate values that arrive while a render is in flight are dropped, and the
 newest one renders to completion (never cancelled), so the displayed frame always
 matches the finger.
+
+The GPU backend **reuses a single EGL context** (`PixelBuffer` + `GPUImageRenderer`
+on one dedicated GL thread) across renders, rebuilding it only when the image
+dimensions change — instead of allocating a fresh context every frame.
 
 ### Pluggable rendering backend
 
@@ -116,11 +128,15 @@ New backends (RenderEffect, native, remote…) drop in the same way.
 
 ### Process-death survival ("AKM")
 
-The source `Uri`, the `PipelineSettings` and the selected tab are persisted in
-**`SavedStateHandle`**. On recreation (config change *or* background process
-kill) the ViewModel reloads the image from the `Uri` and re-applies the saved
-edits, returning the user exactly where they were. Bitmaps are too large to
-serialize, so we persist the `Uri` and reload rather than the pixels.
+The source `Uri`, the `PipelineSettings`, the selected tab, **and the pending
+camera-capture `Uri`** are persisted in **`SavedStateHandle`**. On recreation
+(config change *or* background process kill) the ViewModel reloads the image and
+re-applies the saved edits, returning the user exactly where they were. The
+pending-capture key matters specifically for the camera: under "don't keep
+activities" the process is killed while the camera app is foreground, so the
+capture target must outlive the View — the `TakePicture` result comes back as an
+`EditorIntent.CameraCaptured`, and the ViewModel reads the target from saved
+state. Bitmaps are too large to serialize, so we persist `Uri`s and reload.
 
 ### Memory strategy — high-res but OOM-safe
 
@@ -130,8 +146,8 @@ which derives **pixel budgets from the heap** (`Runtime.maxMemory()`, with
 any aspect ratio including panoramas/gigapixel maps.
 
 - **Editing** runs on a heap-bounded working copy (`editingMaxPixels`) — as high
-  resolution as fits safely once the ~4× pipeline peak and live preview are
-  accounted for. The live drag preview is further downscaled (~1080px).
+  resolution as fits safely once the pipeline peak is accounted for. Also capped
+  by a safe GL texture size (4096²) so a single render always fits one texture.
 - **Saving** re-decodes the *original* at `exportMaxPixels` and re-runs the
   pipeline ([`ExportImageUseCase`](app/src/main/java/com/varos/imageenhance/domain/usecase/ExportImageUseCase.kt)),
   so the file is **full original resolution whenever it fits the budget** (a
@@ -148,15 +164,15 @@ any aspect ratio including panoramas/gigapixel maps.
 
 ## Third-party libraries
 
-Intentionally minimal — no image library needed:
-
 - **GPUImage** (`jp.co.cyberagent.android:gpuimage`) — OpenGL ES filter pipeline
   with off-screen bitmap rendering; gives GPU-accelerated convolutions/blur on
-  all target devices (works on minSdk 28, no deprecated RenderScript/AGSL-33+).
+  all target devices (works on minSdk 28, no deprecated RenderScript / AGSL-33+).
+  Its low-level `PixelBuffer`/`GPUImageRenderer` are used directly for the
+  persistent-context optimization.
 - **Koin** (`koin-androidx-compose`) — lightweight, no-codegen DI; one readable
   composition root, which suits the plugin-filter model.
 - **`androidx.exifinterface`** — reliable EXIF orientation across formats/devices.
-- **`kotlinx-coroutines`** — background processing, debounce, cancellation.
+- **`kotlinx-coroutines`** — background processing, conflation, cancellation.
 - **`lifecycle-viewmodel-compose`** + **`material-icons-extended`** — standard
   Jetpack/Compose tooling. Bitmaps render directly via `bitmap.asImageBitmap()`,
   so no Coil/Glide dependency.
@@ -166,31 +182,35 @@ Intentionally minimal — no image library needed:
 - GPU max texture size is treated as 4096² (the safe API-28+ floor) rather than
   queried at runtime, so images above ~16 MP are downsampled even on GPUs that
   could handle more.
-- GPUImage renders each `process()` call as a fresh off-screen pass; a persistent
-  GL context with per-frame uniform updates would squeeze out more live-preview
-  performance (a follow-up).
-- Preview/final reload on process death rather than persisting pixels.
+- The persistent GL renderer reuses the EGL context but still rebuilds the filter
+  group per render (re-initialising shaders). Caching filter instances and only
+  pushing new uniform values would remove per-frame shader compilation — the next
+  performance win.
+- The GPU `ImageProcessor` is an app-lifetime singleton and never explicitly
+  destroys its GL resources / render thread (fine for one screen; production
+  would scope it).
 
 ## What I'd improve for production
 
-- Re-introduce optional heavier filters behind the same `ImageFilter` contract,
-  GPU-accelerated where it pays off.
+- Cache GPU filter instances (uniform updates only) for buttery full-res drag.
+- Tiled full-resolution export so even gigapixel images save at native size.
 - Undo/redo stack; crop/rotate gestures in the viewport.
-- Broader unit/instrumentation tests (Robolectric for the pipeline).
+- Automated tests: unit-test `MemoryPolicy`/`PipelineSettings`, and instrumented
+  tests for the GPU/CPU processors and process-death restoration.
 
 ## Known limitations
 
-- Sharpen/threshold are O(pixels) on CPU; the full-res render after a drag has a
-  brief delay (shown via the progress bar) — the live preview hides it.
 - Save targets `Pictures/ImageEnhance` via MediaStore; on API < 29 behaviour may
   vary by OEM.
 - On process death the captured-photo temp file (camera path) may have been
   cleared from cache; gallery picks always reload.
 - Truly enormous images (gigapixel) are saved downsampled to the heap-safe size,
   not at full original resolution — `Bitmap.compress` needs the whole bitmap in
-  memory, so full-res export of those would require tiled encoding (a production
-  follow-up). Normal phone photos (≤ ~16 MP) save at true original resolution.
-- One image at a time; no batch processing.
+  memory, so full-res export of those would require tiled encoding. Normal phone
+  photos (≤ ~16 MP) save at true original resolution.
+- The CPU backend currently implements a subset (Brightness, Contrast, Sharpen,
+  Grayscale, B&W) — enough to demonstrate the pluggable architecture.
+- One image at a time; no batch processing. No automated tests yet.
 
 ## Build & run
 
@@ -200,7 +220,5 @@ Open in Android Studio and run the `app` configuration, or:
 ./gradlew :app:assembleDebug
 ```
 
-Requires `compileSdk 36`, JDK 21, `minSdk 28`.
-```
-./gradlew test            # pure-domain unit tests
-```
+Requires `compileSdk 36`, JDK 21, `minSdk 28`. To run the whole pipeline on the
+CPU instead of the GPU, flip `USE_GPU = false` in `di/AppModule.kt`.
