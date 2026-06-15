@@ -1,6 +1,5 @@
 package com.varos.imageenhance.presentation.editor
 
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,9 +35,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -64,24 +61,17 @@ fun EditorScreen(viewModel: EditorViewModel) {
         ActivityResultContracts.PickVisualMedia(),
     ) { uri -> uri?.let { viewModel.onIntent(EditorIntent.PickImage(it)) } }
 
-    // Hold the capture target across the camera round-trip; on success we load it.
-    var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
+    // The capture target Uri lives in the ViewModel's SavedStateHandle, so it
+    // survives process death while the camera app is foreground.
     val camera = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture(),
-    ) { success ->
-        if (success) pendingCaptureUri?.let { viewModel.onIntent(EditorIntent.PickImage(it)) }
-        pendingCaptureUri = null
-    }
+    ) { success -> viewModel.onIntent(EditorIntent.CameraCaptured(success)) }
 
     fun launchPicker() = picker.launch(
         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
     )
 
-    fun launchCamera() {
-        val uri = viewModel.captureUri()
-        pendingCaptureUri = uri
-        camera.launch(uri)
-    }
+    fun launchCamera() = camera.launch(viewModel.captureUri())
 
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->

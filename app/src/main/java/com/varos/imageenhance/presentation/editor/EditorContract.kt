@@ -28,8 +28,15 @@ data class EditorState(
 }
 
 sealed interface EditorIntent {
-    /** A gallery or camera image was chosen. */
+    /** A gallery image was chosen. */
     data class PickImage(val uri: Uri) : EditorIntent
+
+    /**
+     * Result of the camera capture. The target Uri is held in SavedStateHandle
+     * (not the View), so it survives the process death that happens while the
+     * camera app is foreground under "don't keep activities".
+     */
+    data class CameraCaptured(val success: Boolean) : EditorIntent
 
     /** Switch the active tool tab. */
     data class SelectFilter(val filterId: String) : EditorIntent

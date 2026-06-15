@@ -99,6 +99,7 @@ class EditorViewModel(
     fun onIntent(intent: EditorIntent) {
         when (intent) {
             is EditorIntent.PickImage -> loadFromUri(intent.uri, restoredSettings = null)
+            is EditorIntent.CameraCaptured -> onCameraCaptured(intent.success)
             is EditorIntent.SelectFilter -> {
                 reduce { it.copy(selectedFilterId = intent.filterId) }
                 savedState[KEY_SELECTED] = intent.filterId
@@ -111,8 +112,22 @@ class EditorViewModel(
         }
     }
 
-    /** A fresh file Uri for the camera to capture into (not an intent — no state change). */
-    fun captureUri(): Uri = createCaptureUri()
+    /**
+     * A fresh file Uri for the camera to capture into. Persisted in
+     * SavedStateHandle so it survives process death while the camera is open;
+     * the result comes back via [EditorIntent.CameraCaptured].
+     */
+    fun captureUri(): Uri {
+        val uri = createCaptureUri()
+        savedState[KEY_PENDING_CAPTURE] = uri.toString()
+        return uri
+    }
+
+    private fun onCameraCaptured(success: Boolean) {
+        val pending = savedState.get<String>(KEY_PENDING_CAPTURE)?.toUri()
+        savedState[KEY_PENDING_CAPTURE] = null
+        if (success && pending != null) loadFromUri(pending, restoredSettings = null)
+    }
 
     private fun changeValue(filterId: String, value: Float) {
         val settings = _state.value.settings.with(filterId, value)
@@ -211,5 +226,6 @@ class EditorViewModel(
         const val KEY_URI = "editor.uri"
         const val KEY_SETTINGS = "editor.settings"
         const val KEY_SELECTED = "editor.selected"
+        const val KEY_PENDING_CAPTURE = "editor.pendingCapture"
     }
 }
